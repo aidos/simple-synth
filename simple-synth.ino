@@ -4,58 +4,73 @@
 #include <avr/pgmspace.h>
 
 
+// output on arduino pin 3
 #define PWM_PIN       3
 #define PWM_VALUE     OCR2B
 #define PWM_INTERRUPT TIMER2_OVF_vect
 
 
-// sine wave represented as 256 discrete samples
-const  char  waveTable[] PROGMEM = {
-  1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
-  33, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55, 57, 59, 61, 63, 65,
-  67, 69, 71, 73, 75, 77, 79, 81, 83, 85, 87, 89, 91, 93, 95, 97, 99,
-  101, 103, 105, 107, 109, 111, 113, 115, 117, 119, 121, 123, 125, 127, 129, 131, 133,
-  135, 137, 139, 141, 143, 145, 147, 149, 151, 153, 155, 157, 159, 161, 163, 165, 167,
-  169, 171, 173, 175, 177, 179, 181, 183, 185, 187, 189, 191, 193, 195, 197, 199, 201,
-  203, 205, 207, 209, 211, 213, 215, 217, 219, 221, 223, 225, 227, 229, 231, 233, 235,
-  237, 239, 241, 243, 245, 247, 249, 251, 253, 255, 254, 252, 250, 248, 246, 244, 242,
-  240, 238, 236, 234, 232, 230, 228, 226, 224, 222, 220, 218, 216, 214, 212, 210, 208,
-  206, 204, 202, 200, 198, 196, 194, 192, 190, 188, 186, 184, 182, 180, 178, 176, 174,
-  172, 170, 168, 166, 164, 162, 160, 158, 156, 154, 152, 150, 148, 146, 144, 142,
-  140, 138, 136, 134, 132, 130, 128, 126, 124, 122, 120, 118, 116, 114, 112, 110, 108,
-  106, 104, 102, 100, 98, 96, 94, 92, 90, 88, 86, 84, 82, 80, 78, 76, 74, 72, 70, 68, 66,
-  64, 62, 60, 58, 56, 54, 52, 50, 48, 46, 44, 42, 40, 38, 36, 34, 32, 30, 28, 26, 24, 22,
-  20, 18, 16, 14, 12, 10, 8, 6, 4, 2, 0
-};
+// General model is that we have a wavetable (below) of 256 discrete samples representing a sine wave which we play back at the desired frequency
 
+// To play at 440 Hz (middle A) we have 440*256 = 112,640 discrete samples to play through in one second
+// Consider the speed at which the interrupts are happening - 31,250 times per second
+// So for each interrupt we need to jump forward 112640/31250 = 3.60448 entries in the wavetable
+// We'll call that the "increment"
 
+// More generally, each musical note can be represented as an increment. The
+// best way to respresent that is to work in 16 bit using some multiple of 2
+// and then shift that down so we don't lose too much resolution due to rounding.
 
-// Effectively we can represent each note on the keyboard as the number of wavetable
-// entries we need to jump per sample.
-
-// The wavetable itself takes 256 samples to run through
-// So if we just did incremented 1 position for each sample it would be 31250/256 = 122 Hz
-
-// For an A at 440 Hz, we want to run through the wavetable 440 times per second
-// IE we need move to the next wavetable entry every 0.277432528 samples
-// IE we want to increment 3.60448 wavetable entries per sample for a note at 440 Hz
-
-// The best way to respresent that is to work in 16 bit using some multiple of
-// 2 and then shift that down so we don't lose too much resolution due to rounding.
-// So, we can represent 440 Hz as 3691 = (2^10) * 256 * 440 / 31250
-
-// more generally:
-// notes = [261.6, 277.2, 293.7, 311.1, 329.6, 349.2, 370.0, 392.0, 415.3, 440.0, 466.2, 493.9]
-// increments = [round(n * 256 / 31250 * (2**10)) for n in notes]
-// increments = [2194, 2325, 2464, 2610, 2765, 2929, 3104, 3288, 3484, 3691, 3911, 4143]
+// So, we can represent 440 Hz as 3691 = 440 * 256 * (2^10) / 31250
+// More generally:
+// >>> notes = [261.6, 277.2, 293.7, 311.1, 329.6, 349.2, 370.0, 392.0, 415.3, 440.0, 466.2, 493.9]
+// >>> increments = [round(n * 256 * (2**10) / 31250) for n in notes]
+// >>> [2194, 2325, 2464, 2610, 2765, 2929, 3104, 3288, 3484, 3691, 3911, 4143]
+// TODO should we be shifting by 8 bits instead?
 
 // Note that we only need an octave worth and then can shift up / down to get the other octaves
 
 
-volatile uint16_t freq = 0;
+// A sine wave represented as 256 discrete samples
+// Note that we can, and will ultimately, represent different waves (square and saw) in the same way
+// >>> inc = math.pi * 2 / 256
+// >>> [int(256 - (128 * (1 + math.cos(inc*i)))) for i in range(256)]
+const  char  wavetable[] PROGMEM = {
+  0, 1, 1, 1, 1, 1, 2, 2, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 16, 17, 19, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40,
+  43, 45, 47, 50, 52, 55, 57, 60, 63, 65, 68, 71, 74, 77, 80, 82, 85, 88, 91, 94, 97, 100, 104, 107, 110, 113, 116, 119,
+  122, 125, 128, 132, 135, 138, 141, 144, 147, 150, 153, 157, 160, 163, 166, 169, 172, 175, 177, 180, 183, 186, 189, 192,
+  194, 197, 200, 202, 205, 207, 210, 212, 214, 217, 219, 221, 223, 225, 227, 229, 231, 233, 235, 237, 238, 240, 241, 243,
+  244, 246, 247, 248, 249, 250, 251, 252, 253, 253, 254, 255, 255, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 255, 255,
+  254, 253, 253, 252, 251, 250, 249, 248, 247, 246, 244, 243, 241, 240, 238, 237, 235, 233, 231, 229, 227, 225, 223, 221, 219, 217,
+  214, 212, 210, 207, 205, 202, 200, 197, 194, 192, 189, 186, 183, 180, 177, 175, 172, 169, 166, 163, 160, 157, 153, 150, 147, 144,
+  141, 138, 135, 132, 129, 125, 122, 119, 116, 113, 110, 107, 104, 100, 97, 94, 91, 88, 85, 82, 80, 77, 74, 71, 68, 65, 63, 60,
+  57, 55, 52, 50, 47, 45, 43, 40, 38, 36, 34, 32, 30, 28, 26, 24, 22, 20, 19, 17, 16, 14, 13, 11, 10, 9, 8, 7, 6,
+  5, 4, 4, 3, 2, 2, 1, 1, 1, 1, 1
+};
+
+
+
+
+// oscilator tracks where we're currently at in the wavetable. On each interrupt we add the increment to that
+// to give the new wavetable position.
+// NOTE we use 16 bits for each of the below to maintain resolution and will then
+// shift it down at the final step - TODO is there a way to just use the msb?
+volatile uint16_t oscilator = 0;
+// increment represents the frequency, but inverted to tell us how far to move
+// in the wavetable for each sample. We're defaulting to middle C
+volatile uint16_t increment = 2194;
+
 
 void audioOn() {
+  // set up Timer 2 to handle our PWM
+  // we use the interrupt to trigger the generation of samples
+  // we use the pwm for outputs
   // Set up PWM to 31.25kHz, phase accurate
+  // phase accurute = runs fom 0 -> 255 -> back to down 0 again
+
+  // COM2B1 = Clear OC2B on Compare Match
+  // WGM20  = PWM, Phase Correct
+  // CS20   = No prescaling
   TCCR2A = _BV(COM2B1) | _BV(WGM20);
   TCCR2B = _BV(CS20);
   TIMSK2 = _BV(TOIE2);
@@ -64,7 +79,6 @@ void audioOn() {
 
 // -----------------------------------------------------------------------------
 
-MIDI_CREATE_DEFAULT_INSTANCE();
 
 void setup() {
   pinMode(PWM_PIN, OUTPUT);
@@ -81,9 +95,13 @@ void loop() {
 ISR(PWM_INTERRUPT)
 {
   // We have a timer which interrupts us 31250 times per second. Each time that happens we calculate the
-  // height of the current wave and set that as the PWM duty cycle value.
+  // amplitude of the wave and set that as the PWM duty cycle value.
+  // TODO does this need to be halfed along the way because of the phase accurate PWM setting?
 
   uint8_t output;
+
+  oscilator += increment;
+  output = pgm_read_byte(&wavetable[(oscilator >> 10)]);
 
   PWM_VALUE = output;
 }
