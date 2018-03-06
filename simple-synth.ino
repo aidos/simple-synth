@@ -1,4 +1,5 @@
 
+
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/pgmspace.h>
@@ -9,6 +10,7 @@
 #define PWM_VALUE     OCR2B
 #define PWM_INTERRUPT TIMER2_OVF_vect
 
+#define NUM_OSCILATORS 5
 
 // General model is that we have a wavetable (below) of 256 discrete samples representing a sine wave which we play back at the desired frequency
 
@@ -35,7 +37,7 @@
 // Note that we can, and will ultimately, represent different waves (square and saw) in the same way
 // >>> inc = math.pi * 2 / 256
 // >>> [int(256 - (128 * (1 + math.cos(inc*i)))) for i in range(256)]
-const  char  wavetable[] PROGMEM = {
+const char wavetable[] PROGMEM = {
   0, 1, 1, 1, 1, 1, 2, 2, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 16, 17, 19, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40,
   43, 45, 47, 50, 52, 55, 57, 60, 63, 65, 68, 71, 74, 77, 80, 82, 85, 88, 91, 94, 97, 100, 104, 107, 110, 113, 116, 119,
   122, 125, 128, 132, 135, 138, 141, 144, 147, 150, 153, 157, 160, 163, 166, 169, 172, 175, 177, 180, 183, 186, 189, 192,
@@ -55,10 +57,13 @@ const  char  wavetable[] PROGMEM = {
 // to give the new wavetable position.
 // NOTE we use 16 bits for each of the below to maintain resolution and will then
 // shift it down at the final step - TODO is there a way to just use the msb?
-volatile uint16_t oscilator = 0;
-// increment represents the frequency, but inverted to tell us how far to move
-// in the wavetable for each sample. We're defaulting to middle C
-volatile uint16_t increment = 2194;
+typedef struct
+{
+   uint16_t oscilator;
+   uint16_t increment;
+} Oscilator;
+
+Oscilator volatile oscilators[NUM_OSCILATORS];
 
 
 void audioOn() {
@@ -89,6 +94,18 @@ void setup() {
 void loop() {
   // no-op (for the moment)
   // we'll handle the midi notes / updating variables that start/stop oscilators etc here
+
+  oscilators[0].increment = 1097; // C3
+  oscilators[1].increment = 1305; // E
+  oscilators[2].increment = 1552; // G
+  oscilators[3].increment = 2194; // C4
+  delay(100);
+
+  oscilators[0].increment = 0; // C3
+  oscilators[1].increment = 0; // E
+  oscilators[2].increment = 0; // G
+  oscilators[3].increment = 0; // C4
+  delay(500);
 }
 
 
@@ -98,10 +115,12 @@ ISR(PWM_INTERRUPT)
   // amplitude of the wave and set that as the PWM duty cycle value.
   // TODO does this need to be halfed along the way because of the phase accurate PWM setting?
 
-  uint8_t output;
+  uint8_t output = 0;
 
-  oscilator += increment;
-  output = pgm_read_byte(&wavetable[(oscilator >> 10)]);
+  for (uint8_t i = 0; i < NUM_OSCILATORS; i++) {
+    oscilators[i].oscilator += oscilators[i].increment;
+    output += (pgm_read_byte(&wavetable[(oscilators[i].oscilator >> 10)])>>1);
+  }
 
   PWM_VALUE = output;
 }
