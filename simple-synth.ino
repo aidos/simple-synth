@@ -63,6 +63,7 @@ typedef struct
    uint16_t increment;
 } Oscilator;
 
+// we run NUM_OSCILATORS oscilators for polyphonic audio
 Oscilator volatile oscilators[NUM_OSCILATORS];
 
 
@@ -117,10 +118,19 @@ ISR(PWM_INTERRUPT)
 
   uint8_t output = 0;
 
-  for (uint8_t i = 0; i < NUM_OSCILATORS; i++) {
-    oscilators[i].oscilator += oscilators[i].increment;
-    output += (pgm_read_byte(&wavetable[(oscilators[i].oscilator >> 10)])>>1);
-  }
+  // increment all the oscilators
+  oscilators[0].oscilator += oscilators[0].increment;
+  oscilators[1].oscilator += oscilators[1].increment;
+  oscilators[2].oscilator += oscilators[2].increment;
+  oscilators[3].oscilator += oscilators[3].increment;
+  oscilators[4].oscilator += oscilators[4].increment;
+
+  // put together in the output
+  output += (pgm_read_byte(&wavetable[(oscilators[0].oscilator >> 10)])>>1);
+  output += (pgm_read_byte(&wavetable[(oscilators[1].oscilator >> 10)])>>1);
+  output += (pgm_read_byte(&wavetable[(oscilators[2].oscilator >> 10)])>>1);
+  output += (pgm_read_byte(&wavetable[(oscilators[3].oscilator >> 10)])>>1);
+  output += (pgm_read_byte(&wavetable[(oscilators[4].oscilator >> 10)])>>1);
 
   PWM_VALUE = output;
 }
